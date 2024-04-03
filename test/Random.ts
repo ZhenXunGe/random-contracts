@@ -18,7 +18,23 @@ describe("Random contract", function () {
     // Get the address of the callback contract
     const callbackAddress = await callback.getAddress();
 
-    return { owner, other, random, callbackAddress, dummyVerifier };
+    return { owner, other, random, callback, callbackAddress, dummyVerifier };
+  }
+
+  // Call this function before testing settle_random
+  async function prepareForSettleRandom () {
+    const { random, callback, callbackAddress, dummyVerifier } = await loadFixture(deployRandomFixture);
+
+    // Set DummyVerifier as the verifier for settle_random
+    await random.setVerifier(dummyVerifier);
+
+    // Map 1234 to callbackAddress
+    await random.create_random(
+      1234, // seed
+      callbackAddress // callback
+    );
+
+    return { random, callback };
   }
 
   describe("Constructor", function() {
@@ -37,6 +53,21 @@ describe("Random contract", function () {
   });
 
   describe("CreateRandom", function () {
+    it("Should revert if seed already exists", async function () {
+      const { random, callbackAddress } = await loadFixture(deployRandomFixture);
+
+      await random.create_random(
+        1234, // seed
+        callbackAddress // callback
+      );
+      await expect (
+        random.create_random(
+          1234, // seed
+          callbackAddress // callback
+        )
+      ).to.be.revertedWith("Seed already exists");
+    });
+
     it("Should map a seed to an address of a callback contract", async function () {
       const { random, callbackAddress } = await loadFixture(deployRandomFixture);
 
@@ -73,24 +104,75 @@ describe("Random contract", function () {
       ).to.be.revertedWith("Seed not found");
     });
 
-    it("Should emit Settle event", async function() {
-      const { random, callbackAddress, dummyVerifier } = await loadFixture(deployRandomFixture);
+    it("Should emit Settle event in callback", async function() {
+      const { random, callback } = await loadFixture(prepareForSettleRandom);
 
-      // Set DummyVerifier as the verifier for settle_random
-      await random.setVerifier(dummyVerifier);
-
-      // Map 1234 to callbackAddress
-      await random.create_random(
-        1234, // seed
-        callbackAddress // callback
-      );
       await expect(
         random.settle_random(
           1234, // seed
           0x1234, // randomNumber
           [0] // proof
         )
-      ).to.emit(random, "Settle").withArgs(1234, 0x1234);
+      ).to.emit(callback, "Settle").withArgs(1234, 0x1234);
+      // smap[seed] in callback should not be zero
+    });
+
+    it("smap[seed] in callback should be randomNumber", async function() {
+      const { random, callback } = await loadFixture(prepareForSettleRandom);
+
+      await random.settle_random(
+        1234, // seed
+        0x1234, // randomNumber
+        [0] // proof
+      );
+
+      expect(await callback.smap(1234)).to.be.equal(0x1234);
+    });
+
+    it("Seed should not exist if settle_random is called twice with the same seed", async function() {
+      const { random } = await loadFixture(prepareForSettleRandom);
+
+      await random.settle_random(
+        1234, // seed
+        0x1234, // randomNumber
+        [0] // proof
+      );
+
+      await expect(
+        random.settle_random(
+          1234, // seed
+          0x1234, // randomNumber
+          [0] // proof
+        )
+      ).to.be.revertedWith("Seed not found");
+    });
+
+    it("If there are multiple seeds and callbacks, the Settle event should be emitted for all randomNumber", async function() {
+      const { random, dummyVerifier } = await loadFixture(deployRandomFixture);
+
+      for (let i = 0; i < 30; i++) {
+        const callback = await ethers.deployContract("Callback");
+        const callbackAddress = await callback.getAddress();
+
+        await random.create_random(
+          1234 + i, // seed
+          callbackAddress // callback
+        );
+
+        // Set DummyVerifier as the verifier for settle_random
+        await random.setVerifier(dummyVerifier);
+
+        // Use 0x1234 + i to relace the true random number which cannot get from staticCall
+        // because create_random can't be called twice with the same seed
+        // The true random number is not important in this stress test
+        await expect(
+          random.settle_random(
+            1234 + i, // seed
+            0x1234 + i, // randomNumber
+            [0] // proof
+          )
+        ).to.emit(callback, "Settle").withArgs(1234 + i, 0x1234 + i);
+      }
     });
   })
 });

@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 import "./Verifier.sol";
+import "./Callback.sol";
 
 contract Random {
-    // The Settle event helps off-chain applications understand
-    // what happens within the contract.
-    event Settle(uint256 seed, uint256 randomNumber);
-
     DelphinusVerifier private verifier;
     mapping(uint256 => address) public smap;
     address public owner;
@@ -27,6 +24,8 @@ contract Random {
     // Mapping a seed to a callback contract's address and
     // generate random number with the keccak256 hash algorithm
     function create_random(uint256 seed, address callback) public returns (uint256[2] memory){
+        require(smap[seed] == address(0), "Seed already exists");
+
         smap[seed] = callback;
 
         // Calculate random number with more random values, such as msg.sender and block.timestamp
@@ -44,9 +43,10 @@ contract Random {
         require(smap[seed] != address(0), "Seed not found");
 
         verifier.verify(seed, randomNumber, proof);
-        smap[seed].call(abi.encodeWithSignature("handle_random()"));
 
-        // Notify off-chain applications of the settle_random
-        emit Settle(seed, randomNumber);
+        Callback(smap[seed]).handle_random(seed, randomNumber);
+
+        // Delete seed after callback
+        delete smap[seed];
     }
 }
