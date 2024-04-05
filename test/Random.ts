@@ -8,7 +8,7 @@ describe("Random contract", function () {
   // and reset Hardhat Network to that snapshot in every test.
   async function deployRandomFixture() {
     // Contracts are deployed using the first signer/account by default
-    const [owner, other] = await ethers.getSigners();
+    const [owner] = await ethers.getSigners();
 
     // Deploy the contracts
     const callback = await ethers.deployContract("Callback");
@@ -18,73 +18,65 @@ describe("Random contract", function () {
     // Get the address of the callback contract
     const callbackAddress = await callback.getAddress();
 
-    return { owner, other, random, callback, callbackAddress, dummyVerifier };
+    // Get the address of the callback contract
+    const verifierAddress = await dummyVerifier.getAddress();
+
+    return { owner, random, callback, callbackAddress, verifierAddress };
   }
 
   // Call this function before testing settle_random
   async function prepareForSettleRandom () {
-    const { random, callback, callbackAddress, dummyVerifier } = await loadFixture(deployRandomFixture);
-
-    // Set DummyVerifier as the verifier for settle_random
-    await random.setVerifier(dummyVerifier);
+    const { random, callback, callbackAddress, verifierAddress } = await loadFixture(deployRandomFixture);
 
     // Map 1234 to callbackAddress
     await random.create_random(
       1234, // seed
-      callbackAddress // callback
+      callbackAddress, // callback
+      verifierAddress // verifier
     );
 
     return { random, callback };
   }
 
-  describe("Constructor", function() {
-    it("owner in the Random contract should be the deployer", async function() {
-      const { owner, random } = await loadFixture(deployRandomFixture);
-      expect(await random.owner()).to.equal(owner.address);
-    });
-  });
-
-  describe("SetVerifier", function () {
-    it("Should revert if the caller is not the owner", async function () {
-      const { random, other, dummyVerifier } = await loadFixture(deployRandomFixture);
-
-      await expect(random.connect(other).setVerifier(dummyVerifier)).to.be.revertedWith("Authority: Require Admin");
-    });
-  });
-
   describe("CreateRandom", function () {
     it("Should revert if seed already exists", async function () {
-      const { random, callbackAddress } = await loadFixture(deployRandomFixture);
+      const { random, callbackAddress, verifierAddress } = await loadFixture(deployRandomFixture);
 
       await random.create_random(
         1234, // seed
-        callbackAddress // callback
+        callbackAddress, // callback
+        verifierAddress // verifier
       );
       await expect (
         random.create_random(
           1234, // seed
-          callbackAddress // callback
+          callbackAddress, // callback
+          verifierAddress // verifier
         )
       ).to.be.revertedWith("Seed already exists");
     });
 
-    it("Should map a seed to an address of a callback contract", async function () {
-      const { random, callbackAddress } = await loadFixture(deployRandomFixture);
+    it("Should map a seed to [callbackAddress, verifierAddress]", async function () {
+      const { random, callbackAddress, verifierAddress } = await loadFixture(deployRandomFixture);
 
       await random.create_random(
         1234, // seed
-        callbackAddress // callback
+        callbackAddress, // callback
+        verifierAddress // verifier
       );
-      expect(await random.smap(1234)).to.equal(callbackAddress);
+
+      expect(await random.smap(1234, 0)).to.equal(callbackAddress);
+      expect(await random.smap(1234, 1)).to.equal(verifierAddress);
     });
 
     it("Should return the right random number", async function () {
-      const { owner, random, callbackAddress } = await loadFixture(deployRandomFixture);
+      const { owner, random, callbackAddress, verifierAddress } = await loadFixture(deployRandomFixture);
 
       // The create_random is not a view function, use staticCall to get the return value for testing
       const randomNumber = await random.create_random.staticCall(
         1234, // seed
-        callbackAddress // callback
+        callbackAddress, // callback
+        verifierAddress // verifier
       );
       expect(randomNumber[1]).to.equal(ethers.keccak256(ethers.solidityPacked(["uint256", "address", "uint256"], [1234, owner.address, randomNumber[0]])));
     });
@@ -114,7 +106,6 @@ describe("Random contract", function () {
           [0] // proof
         )
       ).to.emit(callback, "Settle").withArgs(1234, 0x1234);
-      // smap[seed] in callback should not be zero
     });
 
     it("smap[seed] in callback should be randomNumber", async function() {
@@ -148,19 +139,19 @@ describe("Random contract", function () {
     });
 
     it("If there are multiple seeds and callbacks, the Settle event should be emitted for all randomNumber", async function() {
-      const { random, dummyVerifier } = await loadFixture(deployRandomFixture);
+      const { random } = await loadFixture(deployRandomFixture);
 
       for (let i = 0; i < 30; i++) {
         const callback = await ethers.deployContract("Callback");
         const callbackAddress = await callback.getAddress();
+        const dummyVerifier = await ethers.deployContract("DummyVerifier");
+        const verifierAddress = await dummyVerifier.getAddress();
 
         await random.create_random(
           1234 + i, // seed
-          callbackAddress // callback
+          callbackAddress, // callback
+          verifierAddress // verifier
         );
-
-        // Set DummyVerifier as the verifier for settle_random
-        await random.setVerifier(dummyVerifier);
 
         // Use 0x1234 + i to relace the true random number which cannot get from staticCall
         // because create_random can't be called twice with the same seed

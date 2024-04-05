@@ -4,29 +4,15 @@ import "./Verifier.sol";
 import "./Callback.sol";
 
 contract Random {
-    DelphinusVerifier private verifier;
-    mapping(uint256 => address) public smap;
-    address public owner;
-
-    constructor() {
-        owner = msg.sender;
-    }
-
-    function ensure_admin() private view {
-        require(owner == msg.sender, "Authority: Require Admin");
-    }
-
-    function setVerifier(address vaddr) public {
-        ensure_admin();
-        verifier = DelphinusVerifier(vaddr);
-    }
+    mapping(uint256 => address[2]) public smap;
 
     // Mapping a seed to a callback contract's address and
     // generate random number with the keccak256 hash algorithm
-    function create_random(uint256 seed, address callback) public returns (uint256[2] memory){
-        require(smap[seed] == address(0), "Seed already exists");
+    // mapping seed to verify contract's address
+    function create_random(uint256 seed, address callback, address verify) public returns (uint256[2] memory){
+        require(smap[seed][0] == address(0) && smap[seed][1] == address(0), "Seed already exists");
 
-        smap[seed] = callback;
+        smap[seed] = [callback, verify];
 
         // Calculate random number with more random values, such as msg.sender and block.timestamp
         // Return block.timestamp for testing
@@ -40,11 +26,11 @@ contract Random {
         uint256 randomNumber,
         uint256[] calldata proof
     ) public {
-        require(smap[seed] != address(0), "Seed not found");
+        require(smap[seed][0] != address(0) && smap[seed][1] != address(0), "Seed not found");
 
-        verifier.verify(seed, randomNumber, proof);
+        DelphinusVerifier(smap[seed][1]).verify(seed, randomNumber, proof);
 
-        Callback(smap[seed]).handle_random(seed, randomNumber);
+        Callback(smap[seed][0]).handle_random(seed, randomNumber);
 
         // Delete seed after callback
         delete smap[seed];
